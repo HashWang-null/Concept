@@ -1,0 +1,43 @@
+pretrained_model_name_or_path: XXX
+output_dir: XXX
+logging_dir: logs
+
+# revision: null
+# variant: null
+
+seed: 1
+resolution: 1024
+train_batch_size: 4
+
+max_train_steps: 100000
+checkpointing_steps: 500
+checkpoints_total_limit: 3
+# resume_from_checkpoint: null
+gradient_accumulation_steps: 1
+gradient_checkpointing: false
+upcast_vae: false
+learning_rate: 5.0e-6
+scale_lr: false
+lr_scheduler: constant
+lr_warmup_steps: 500
+lr_num_cycles: 1
+lr_power: 1.0
+use_8bit_adam: false
+dataloader_num_workers: 0
+weighting_scheme: logit_normal
+logit_mean: 0.0
+logit_std: 1.0
+mode_scale: 1.29
+precondition_outputs: 1
+adam_beta1: 0.9
+adam_beta2: 0.999
+adam_weight_decay: 0.01
+adam_epsilon: 1.0e-8
+max_grad_norm: 1.0
+
+allow_tf32: false
+report_to: tensorboard
+mixed_precision: fp16  # Options: "no", "fp16", "bf16"
+set_grads_to_none: false
+
+
