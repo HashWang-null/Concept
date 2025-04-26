@@ -1,6 +1,9 @@
+tracker_project_name: sdv3-5-joint-attn
+run_name: lr-5e6-10k
 pretrained_model_name_or_path: XXX
-output_dir: XXX
+output_dir: experiments
 logging_dir: logs
+resume_from_checkpoint: auto
 
 # revision: null
 # variant: null
@@ -36,7 +39,7 @@ adam_epsilon: 1.0e-8
 max_grad_norm: 1.0
 
 allow_tf32: false
-report_to: tensorboard
+report_to: wandb
 mixed_precision: fp16  # Options: "no", "fp16", "bf16"
 set_grads_to_none: false
 

@@ -35,18 +35,13 @@ import transformers
 from diffusers import (
     AutoencoderKL,
     FlowMatchEulerDiscreteScheduler,
-    SD3ControlNetModel,
     SD3Transformer2DModel,
-    StableDiffusion3ControlNetPipeline,
 )
 from diffusers.utils import get_logger
 from diffusers.optimization import get_scheduler
 from diffusers.models.attention import JointTransformerBlock
 from diffusers.training_utils import compute_density_for_timestep_sampling, compute_loss_weighting_for_sd3, free_memory
 from diffusers.utils import check_min_version, is_wandb_available, make_image_grid
-from diffusers.utils.hub_utils import load_or_create_model_card, populate_model_card
-from diffusers.utils.testing_utils import backend_empty_cache
-from diffusers.utils.torch_utils import is_compiled_module
 
 from data import load_data
 from data.dataset import PairedDataset
@@ -241,7 +236,7 @@ class AdaptedSD3Transformer(SD3Transformer2DModel):
         return_dict: bool = True,
         skip_layers: Optional[List[int]] = None,
         **kwargs,
-    ) -> Union[torch.FloatTensor, Transformer2DModelOutput]:
+    ):
         height, width = hidden_states.shape[-2:]
 
         hidden_states = self.pos_embed(hidden_states)  # takes care of adding positional embeddings too.
@@ -327,7 +322,7 @@ class Trainer:
         accelerator = Accelerator(
             gradient_accumulation_steps=config.gradient_accumulation_steps,
             mixed_precision=config.mixed_precision,
-            log_with="tensorboard",
+            log_with=config.report_to,  # default as wandb
             project_config=accelerator_project_config,
             kwargs_handlers=[kwargs],
         )
@@ -346,6 +341,10 @@ class Trainer:
         else:
             transformers.utils.logging.set_verbosity_error()
             diffusers.utils.logging.set_verbosity_error()
+        if self.accelerator.is_main_process:
+            if is_wandb_available() and self.accelerator.tracker is not None:
+                import wandb
+                wandb.config.update(vars(config))
 
         # If passed along, set the training seed now.
         if config.seed is not None:
@@ -464,27 +463,55 @@ class Trainer:
         logger.info("Loading everything OK.")
 
     def load_checkpoint(self):
-        if self.config.resume_from_checkpoint:
-            if os.path.exists(self.config.resume_from_checkpoint):
-                self.accelerator.load_state(self.config.resume_from_checkpoint)
+        resume_path = self.config.resume_from_checkpoint
+        output_dir = self.config.output_dir
+        logger.info(f"Will find checkpoint from {output_dir}")
+        if resume_path == "auto":
+            checkpoints = os.listdir(output_dir)
+            checkpoints = [d for d in checkpoints if d.startswith("checkpoint") and os.path.isdir(os.path.join(output_dir, d))]
+            if len(checkpoints) == 0:
+                logger.info("No checkpoints found. Starting training from scratch.")
+                self.global_step = 0
+                return
+            checkpoints = sorted(checkpoints, key=lambda x: int(x.split("-")[1]), reverse=True)
+            checkpoint_paths = [os.path.join(output_dir, ckpt) for ckpt in checkpoints]
+        elif resume_path:
+            checkpoint_paths = [resume_path]
+        else:
+            self.global_step = 0
+            return
+
+        for checkpoint_path in checkpoint_paths:
+            try:
+                if not os.path.exists(checkpoint_path):
+                    continue
+                self.accelerator.load_state(checkpoint_path)
 
                 if self.accelerator.is_main_process:
-                    state_file = os.path.join(self.config.resume_from_checkpoint, "training_state.json")
+                    state_file = os.path.join(checkpoint_path, "training_state.json")
                     if os.path.exists(state_file):
                         with open(state_file, "r") as f:
                             training_state = json.load(f)
                             global_step = training_state.get("global_step", 0)
                     else:
-                        logger.warning("training_state.json not found; global_step set to 0")
+                        logger.warning(f"{state_file} not found. Global_step set to 0")
                         global_step = 0
                 else:
                     global_step = 0
 
                 global_step_tensor = torch.tensor(global_step, device=self.accelerator.device)
-                if torch.distributed.is_initialized():
-                    torch.distributed.broadcast(global_step_tensor, src=0)
+                global_step_tensor = self.accelerator.broadcast(global_step_tensor)
                 self.global_step = global_step_tensor.item()
-    
+
+                logger.info(f"Successfully resumed from checkpoint {checkpoint_path} at global step {self.global_step}")
+                return
+            except Exception as e:
+                logger.warning(f"Failed to load checkpoint from {checkpoint_path}. Error: {str(e)}")
+                continue
+
+        logger.warning("All checkpoint loading attempts failed. Starting training from scratch.")
+        self.global_step = 0
+
     def save_checkpoint(self):
         if self.accelerator.is_main_process:
             # _before_ saving state, check if this save would set us over the `checkpoints_total_limit`
